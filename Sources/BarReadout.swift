@@ -7,17 +7,17 @@ struct StackedReadout: View {
     let sample: MemorySample
 
     private let width: CGFloat = 30
-    private let lineHeight: CGFloat = 9.5
+    private let lineHeight: CGFloat = 10.5
 
     var body: some View {
         VStack(spacing: 0) {
             Text("\(sample.pressure)%")
                 .frame(width: width, height: lineHeight, alignment: .leading)
-            Text("\(Int(sample.usedGB.rounded()))GB")
+            Text("\(Int(sample.usedGB.rounded()))G")
                 .frame(width: width, height: lineHeight, alignment: .trailing)
         }
         // Monospaced digits keep the item from shifting as values change.
-        .font(.system(size: 9, weight: .medium).monospacedDigit())
+        .font(.system(size: 10, weight: .medium).monospacedDigit())
     }
 }
 
