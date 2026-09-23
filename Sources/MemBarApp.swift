@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class Monitor: ObservableObject {
     @Published private(set) var sample: MemorySample?
+    @Published private(set) var barImage: NSImage?
 
     @Published var interval: Double {
         didSet {
@@ -12,15 +13,26 @@ final class Monitor: ObservableObject {
         }
     }
 
+    @Published var stacked: Bool {
+        didSet {
+            UserDefaults.standard.set(stacked, forKey: "stackedLayout")
+            render()
+        }
+    }
+
     private var timer: Timer?
 
     init() {
-        let stored = UserDefaults.standard.double(forKey: "refreshInterval")
-        interval = stored > 0 ? stored : 2
+        UserDefaults.standard.register(defaults: [
+            "refreshInterval": 2.0,
+            "stackedLayout": true,
+        ])
+        interval = UserDefaults.standard.double(forKey: "refreshInterval")
+        stacked = UserDefaults.standard.bool(forKey: "stackedLayout")
         restart()
     }
 
-    /// What shows in the bar, e.g. "13%/15GB".
+    /// Single-line form, e.g. "13%/17GB".
     var title: String {
         guard let sample else { return "—" }
         return "\(sample.pressure)%/\(Int(sample.usedGB.rounded()))GB"
@@ -40,6 +52,15 @@ final class Monitor: ObservableObject {
 
     private func refresh() {
         sample = MemoryReader.sample()
+        render()
+    }
+
+    private func render() {
+        guard stacked, let sample else {
+            barImage = nil
+            return
+        }
+        barImage = StackedReadout(sample: sample).renderedAsTemplate()
     }
 }
 
@@ -56,6 +77,8 @@ struct MenuContent: View {
         }
 
         Divider()
+
+        Toggle("Stacked Layout", isOn: $monitor.stacked)
 
         Picker("Refresh", selection: $monitor.interval) {
             Text("1 second").tag(1.0)
@@ -92,9 +115,13 @@ struct MemBarApp: App {
         MenuBarExtra {
             MenuContent(monitor: monitor)
         } label: {
-            // Monospaced digits so the width doesn't jitter as numbers change.
-            Text(monitor.title)
-                .font(.system(size: 13).monospacedDigit())
+            if let barImage = monitor.barImage {
+                Image(nsImage: barImage)
+            } else {
+                // Monospaced digits so the width doesn't jitter as numbers change.
+                Text(monitor.title)
+                    .font(.system(size: 13).monospacedDigit())
+            }
         }
         .menuBarExtraStyle(.menu)
     }
