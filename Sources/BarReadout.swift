@@ -1,11 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// Percent thresholds for turning orange (warning) and red (critical),
-/// shared by pressure and usage.
+/// Percent thresholds for turning orange (warning) and red (critical).
 enum Thresholds {
-    static let warning = 70
-    static let critical = 85
+    static let pressure = (warning: 70, critical: 85)
+    /// Usage runs high by design on macOS, so it gets later thresholds.
+    static let usage = (warning: 80, critical: 90)
+}
+
+extension Level {
+    init(pressure: Int) {
+        self.init(percent: pressure, warning: Thresholds.pressure.warning,
+                  critical: Thresholds.pressure.critical)
+    }
+
+    init(usagePercent: Int) {
+        self.init(percent: usagePercent, warning: Thresholds.usage.warning,
+                  critical: Thresholds.usage.critical)
+    }
 }
 
 /// Normal / warning / critical, from caller-supplied percent thresholds.
@@ -21,56 +33,57 @@ enum Level {
     }
 
     func color(base: Color) -> Color {
+        Color(nsColor: nsColor(base: NSColor(base)))
+    }
+
+    func nsColor(base: NSColor) -> NSColor {
         switch self {
         case .normal: base
-        case .warning: Color(nsColor: .systemOrange)
-        case .critical: Color(nsColor: .systemRed)
+        case .warning: .systemOrange
+        case .critical: .systemRed
         }
     }
 }
 
-/// Two-line bar layout: pressure top-left, usage bottom-right.
-/// Sized to fit inside the ~22pt menu bar.
-struct StackedReadout: View {
-    let sample: MemorySample
-    let pressureLevel: Level
-    let usageLevel: Level
-    let base: Color
+/// Two-line bar layout: pressure top-left, usage bottom-right, sized for
+/// the ~22pt menu bar. Drawn with plain CoreGraphics rather than SwiftUI's
+/// ImageRenderer, which spins up GPU buffers (~75MB) on every refresh.
+enum StackedReadout {
+    private static let size = NSSize(width: 30, height: 21)
+    private static let lineHeight: CGFloat = 10.5
+    // Monospaced digits keep the item from shifting as values change.
+    private static let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
 
-    private let width: CGFloat = 30
-    private let lineHeight: CGFloat = 10.5
+    /// As a template, macOS handles light/dark and the dimmed state while the
+    /// menu is open; non-template keeps the given colors.
+    static func image(
+        sample: MemorySample,
+        pressureLevel: Level,
+        usageLevel: Level,
+        base: NSColor,
+        template: Bool
+    ) -> NSImage {
+        let top = text("\(sample.pressure)%", color: pressureLevel.nsColor(base: base))
+        let bottom = text("\(Int(sample.usedGB.rounded()))G", color: usageLevel.nsColor(base: base))
 
-    var body: some View {
-        VStack(spacing: 0) {
-            Text("\(sample.pressure)%")
-                .foregroundStyle(pressureLevel.color(base: base))
-                .frame(width: width, height: lineHeight, alignment: .leading)
-            Text("\(Int(sample.usedGB.rounded()))G")
-                .foregroundStyle(usageLevel.color(base: base))
-                .frame(width: width, height: lineHeight, alignment: .trailing)
+        let image = NSImage(size: size, flipped: true) { _ in
+            draw(top, line: 0, alignRight: false)
+            draw(bottom, line: 1, alignRight: true)
+            return true
         }
-        // Monospaced digits keep the item from shifting as values change.
-        .font(.system(size: 10, weight: .medium).monospacedDigit())
-    }
-}
-
-extension View {
-    /// Rasterizes the view for the menu bar. As a template, macOS handles
-    /// light/dark and the dimmed state while the menu is open; non-template
-    /// keeps the view's own colors.
-    @MainActor
-    func renderedForMenuBar(template: Bool) -> NSImage? {
-        let renderer = ImageRenderer(content: self)
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        renderer.scale = scale
-
-        guard let cgImage = renderer.cgImage else { return nil }
-        let image = NSImage(
-            cgImage: cgImage,
-            size: NSSize(width: CGFloat(cgImage.width) / scale,
-                         height: CGFloat(cgImage.height) / scale)
-        )
         image.isTemplate = template
         return image
+    }
+
+    private static func text(_ string: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
+    }
+
+    /// Centers the glyph box vertically in its line, matching the old SwiftUI frames.
+    private static func draw(_ text: NSAttributedString, line: Int, alignRight: Bool) {
+        let textSize = text.size()
+        let x = alignRight ? size.width - textSize.width : 0
+        let y = CGFloat(line) * lineHeight + (lineHeight - textSize.height) / 2
+        text.draw(at: NSPoint(x: x, y: y))
     }
 }

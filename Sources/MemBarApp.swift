@@ -1,11 +1,37 @@
 import ServiceManagement
 import SwiftUI
 
+/// What the panel draws. Only publishes while the panel is open: SwiftUI keeps
+/// the panel's views alive after it closes, and redrawing the charts there on
+/// every tick costs ~75MB of GPU memory for nothing.
+@MainActor
+final class PanelModel: ObservableObject {
+    @Published private(set) var sample: MemorySample?
+    @Published private(set) var history: [HistoryPoint] = []
+
+    private var latest: (sample: MemorySample?, history: [HistoryPoint]) = (nil, [])
+
+    var isVisible = false {
+        didSet { if isVisible { publish() } }
+    }
+
+    func update(sample: MemorySample?, history: [HistoryPoint]) {
+        latest = (sample, history)
+        if isVisible { publish() }
+    }
+
+    private func publish() {
+        sample = latest.sample
+        history = latest.history
+    }
+}
+
 @MainActor
 final class Monitor: ObservableObject {
     @Published private(set) var sample: MemorySample?
     @Published private(set) var barImage: NSImage?
-    @Published private(set) var history: [HistoryPoint] = []
+    private var history: [HistoryPoint] = []
+    let panel = PanelModel()
 
     /// Kept short on purpose: a memory monitor shouldn't hoard memory.
     let historyWindow: TimeInterval = 60
@@ -57,6 +83,7 @@ final class Monitor: ObservableObject {
     private func refresh() {
         sample = MemoryReader.sample()
         record()
+        panel.update(sample: sample, history: history)
         render()
     }
 
@@ -81,8 +108,8 @@ final class Monitor: ObservableObject {
             barImage = nil
             return
         }
-        let pressureLevel = Level(percent: sample.pressure, warning: Thresholds.warning, critical: Thresholds.critical)
-        let usageLevel = Level(percent: Int(sample.usedGB / sample.totalGB * 100), warning: Thresholds.warning, critical: Thresholds.critical)
+        let pressureLevel = Level(pressure: sample.pressure)
+        let usageLevel = Level(usagePercent: Int(sample.usedGB / sample.totalGB * 100))
 
         // Stay a template while both are normal so macOS adapts it to the menu bar.
         // Once either crosses a threshold, colors must survive, so the normal line
@@ -92,29 +119,29 @@ final class Monitor: ObservableObject {
             .first { $0.className.contains("NSStatusBarWindow") }?
             .effectiveAppearance ?? NSApp.effectiveAppearance
         let isDark = barAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let readout = StackedReadout(
+        barImage = StackedReadout.image(
             sample: sample,
             pressureLevel: pressureLevel,
             usageLevel: usageLevel,
-            base: isDark ? .white : .black
-        )
-        barImage = readout.renderedForMenuBar(
+            base: isDark ? .white : .black,
             template: pressureLevel == .normal && usageLevel == .normal
         )
     }
 }
 
 struct MenuContent: View {
-    @ObservedObject var monitor: Monitor
+    /// Not observed: the panel redraws from `panel`, which is quiet while closed.
+    let monitor: Monitor
+    @ObservedObject var panel: PanelModel
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let sample = monitor.sample {
+            if let sample = panel.sample {
                 // Pressure on top, usage below: same order as the two lines in the bar.
                 VStack(alignment: .leading, spacing: 4) {
                     stat("Pressure", "\(sample.pressure)%", color: pressureColor)
-                    SeriesChart(history: monitor.history, value: \.pressure,
+                    SeriesChart(history: panel.history, value: \.pressure,
                                 color: pressureColor, window: monitor.historyWindow)
                         .frame(height: 60)
                 }
@@ -122,7 +149,7 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 4) {
                     stat("Used", String(format: "%.2f / %.0f GB", sample.usedGB, sample.totalGB),
                          color: usageColor)
-                    SeriesChart(history: monitor.history, value: \.usagePercent,
+                    SeriesChart(history: panel.history, value: \.usagePercent,
                                 color: usageColor, window: monitor.historyWindow,
                                 showsTimeLabels: true)
                         .frame(height: 75)
@@ -136,9 +163,9 @@ struct MenuContent: View {
             HStack {
                 // Rarely-touched settings live behind the gear to keep the panel about the data.
                 Menu {
-                    Toggle("Stacked layout", isOn: $monitor.stacked)
+                    Toggle("Stacked layout", isOn: Binding(get: { monitor.stacked }, set: { monitor.stacked = $0 }))
                     Toggle("Launch at login", isOn: launchAtLoginBinding)
-                    Picker("Refresh", selection: $monitor.interval) {
+                    Picker("Refresh", selection: Binding(get: { monitor.interval }, set: { monitor.interval = $0 })) {
                         Text("1 second").tag(1.0)
                         Text("2 seconds").tag(2.0)
                         Text("5 seconds").tag(5.0)
@@ -159,21 +186,19 @@ struct MenuContent: View {
         }
         .padding(14)
         .frame(width: 300)
+        .onAppear { panel.isVisible = true }
+        .onDisappear { panel.isVisible = false }
     }
 
-    /// Series color while normal, orange/red once the current value crosses a threshold.
-    private func stateColor(percent: Int, normal: Color) -> Color {
-        Level(percent: percent, warning: Thresholds.warning, critical: Thresholds.critical)
-            .color(base: normal)
-    }
-
+    // Series color while normal, orange/red once the current value crosses its threshold.
     private var pressureColor: Color {
-        stateColor(percent: monitor.sample?.pressure ?? 0, normal: SeriesColor.pressure)
+        Level(pressure: panel.sample?.pressure ?? 0).color(base: SeriesColor.pressure)
     }
 
     private var usageColor: Color {
-        guard let sample = monitor.sample else { return SeriesColor.usage }
-        return stateColor(percent: Int(sample.usedGB / sample.totalGB * 100), normal: SeriesColor.usage)
+        guard let sample = panel.sample else { return SeriesColor.usage }
+        return Level(usagePercent: Int(sample.usedGB / sample.totalGB * 100))
+            .color(base: SeriesColor.usage)
     }
 
     /// Chart title; the dot matches the chart color.
@@ -210,7 +235,7 @@ struct MemBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(monitor: monitor)
+            MenuContent(monitor: monitor, panel: monitor.panel)
         } label: {
             if let barImage = monitor.barImage {
                 Image(nsImage: barImage)
