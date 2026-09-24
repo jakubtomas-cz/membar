@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+/// Percent thresholds for turning orange (warning) and red (critical),
+/// shared by pressure and usage.
+enum Thresholds {
+    static let warning = 70
+    static let critical = 85
+}
+
 /// Normal / warning / critical, from caller-supplied percent thresholds.
 enum Level {
     case normal, warning, critical
