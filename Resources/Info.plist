@@ -5,6 +5,7 @@
     <key>CFBundleName</key><string>MemBar</string>
     <key>CFBundleDisplayName</key><string>MemBar</string>
     <key>CFBundleIdentifier</key><string>com.jakubtomas.membar</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleExecutable</key><string>MemBar</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
