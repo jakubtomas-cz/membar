@@ -60,7 +60,26 @@ final class Monitor: ObservableObject {
             barImage = nil
             return
         }
-        barImage = StackedReadout(sample: sample).renderedAsTemplate()
+        let pressureLevel = Level(percent: sample.pressure, warning: 70, critical: 80)
+        let usageLevel = Level(percent: Int(sample.usedGB / sample.totalGB * 100), warning: 80, critical: 90)
+
+        // Stay a template while both are normal so macOS adapts it to the menu bar.
+        // Once either crosses a threshold, colors must survive, so the normal line
+        // gets an explicit color matching the current appearance.
+        // Ask the menu bar itself: an LSUIElement app can report light while the bar is dark.
+        let barAppearance = NSApp.windows
+            .first { $0.className.contains("NSStatusBarWindow") }?
+            .effectiveAppearance ?? NSApp.effectiveAppearance
+        let isDark = barAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let readout = StackedReadout(
+            sample: sample,
+            pressureLevel: pressureLevel,
+            usageLevel: usageLevel,
+            base: isDark ? .white : .black
+        )
+        barImage = readout.renderedForMenuBar(
+            template: pressureLevel == .normal && usageLevel == .normal
+        )
     }
 }
 
