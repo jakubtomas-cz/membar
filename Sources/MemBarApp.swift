@@ -68,7 +68,12 @@ final class Monitor: ObservableObject {
             pressure: Double(sample.pressure),
             usagePercent: sample.usedGB / sample.totalGB * 100
         ))
-        history.removeAll { now.timeIntervalSince($0.date) > historyWindow }
+        // Keep exactly one point at or beyond the window's left edge, so the
+        // chart's line always reaches it instead of leaving a gap.
+        let cutoff = now.addingTimeInterval(-historyWindow)
+        while history.count > 1, history[1].date <= cutoff {
+            history.removeFirst()
+        }
     }
 
     private func render() {
@@ -108,17 +113,17 @@ struct MenuContent: View {
             if let sample = monitor.sample {
                 // Pressure on top, usage below: same order as the two lines in the bar.
                 VStack(alignment: .leading, spacing: 4) {
-                    stat("Pressure", "\(sample.pressure)%", color: SeriesColor.pressure)
+                    stat("Pressure", "\(sample.pressure)%", color: pressureColor)
                     SeriesChart(history: monitor.history, value: \.pressure,
-                                color: SeriesColor.pressure, window: monitor.historyWindow)
+                                color: pressureColor, window: monitor.historyWindow)
                         .frame(height: 60)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     stat("Used", String(format: "%.2f / %.0f GB", sample.usedGB, sample.totalGB),
-                         color: SeriesColor.usage)
+                         color: usageColor)
                     SeriesChart(history: monitor.history, value: \.usagePercent,
-                                color: SeriesColor.usage, window: monitor.historyWindow,
+                                color: usageColor, window: monitor.historyWindow,
                                 showsTimeLabels: true)
                         .frame(height: 75)
                 }
@@ -156,7 +161,22 @@ struct MenuContent: View {
         .frame(width: 300)
     }
 
-    /// Chart title; the dot matches the series color.
+    /// Series color while normal, orange/red once the current value crosses a threshold.
+    private func stateColor(percent: Int, normal: Color) -> Color {
+        Level(percent: percent, warning: Thresholds.warning, critical: Thresholds.critical)
+            .color(base: normal)
+    }
+
+    private var pressureColor: Color {
+        stateColor(percent: monitor.sample?.pressure ?? 0, normal: SeriesColor.pressure)
+    }
+
+    private var usageColor: Color {
+        guard let sample = monitor.sample else { return SeriesColor.usage }
+        return stateColor(percent: Int(sample.usedGB / sample.totalGB * 100), normal: SeriesColor.usage)
+    }
+
+    /// Chart title; the dot matches the chart color.
     private func stat(_ label: String, _ value: String, color: Color) -> some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 7, height: 7)

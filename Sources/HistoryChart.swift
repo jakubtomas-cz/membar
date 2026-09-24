@@ -45,6 +45,8 @@ struct SeriesChart: View {
         // Fixed window so the chart scrolls instead of stretching while history fills.
         .chartXScale(domain: start...end)
         .chartYScale(domain: 0...100)
+        // The one point kept past the left edge would otherwise draw outside the plot.
+        .chartPlotStyle { plot in plot.clipped() }
         .chartYAxis {
             AxisMarks(values: [0, 50, 100]) { mark in
                 AxisGridLine()
