@@ -26,6 +26,34 @@ final class PanelModel: ObservableObject {
     }
 }
 
+/// Remembers whether the user wants Launch at login, because macOS can drop the
+/// registration when the app is rebuilt (new ad-hoc signature) or replaced.
+enum LoginItem {
+    private static let key = "launchAtLogin"
+
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    static func set(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: key)
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {}
+    }
+
+    /// Re-registers on launch if the user wanted it but macOS forgot.
+    static func restore() {
+        let wanted = UserDefaults.standard.object(forKey: key) as? Bool ?? isEnabled
+        if wanted, !isEnabled {
+            try? SMAppService.mainApp.register()
+        }
+        UserDefaults.standard.set(wanted, forKey: key)
+    }
+}
+
 @MainActor
 final class Monitor: ObservableObject {
     @Published private(set) var sample: MemorySample?
@@ -59,6 +87,7 @@ final class Monitor: ObservableObject {
         ])
         interval = UserDefaults.standard.double(forKey: "refreshInterval")
         stacked = UserDefaults.standard.bool(forKey: "stackedLayout")
+        LoginItem.restore()
         restart()
     }
 
@@ -133,7 +162,7 @@ struct MenuContent: View {
     /// Not observed: the panel redraws from `panel`, which is quiet while closed.
     let monitor: Monitor
     @ObservedObject var panel: PanelModel
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var launchAtLogin = LoginItem.isEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -216,14 +245,8 @@ struct MenuContent: View {
         Binding(
             get: { launchAtLogin },
             set: { enabled in
-                do {
-                    if enabled {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {}
-                launchAtLogin = SMAppService.mainApp.status == .enabled
+                LoginItem.set(enabled)
+                launchAtLogin = LoginItem.isEnabled
             }
         )
     }
