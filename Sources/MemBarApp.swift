@@ -5,6 +5,10 @@ import SwiftUI
 final class Monitor: ObservableObject {
     @Published private(set) var sample: MemorySample?
     @Published private(set) var barImage: NSImage?
+    @Published private(set) var history: [HistoryPoint] = []
+
+    /// Kept short on purpose: a memory monitor shouldn't hoard memory.
+    private let historyWindow: TimeInterval = 120
 
     @Published var interval: Double {
         didSet {
@@ -52,7 +56,19 @@ final class Monitor: ObservableObject {
 
     private func refresh() {
         sample = MemoryReader.sample()
+        record()
         render()
+    }
+
+    private func record() {
+        guard let sample else { return }
+        let now = Date()
+        history.append(HistoryPoint(
+            date: now,
+            pressure: sample.pressure,
+            usagePercent: sample.usedGB / sample.totalGB * 100
+        ))
+        history.removeAll { now.timeIntervalSince($0.date) > historyWindow }
     }
 
     private func render() {
@@ -88,41 +104,55 @@ struct MenuContent: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
-        if let sample = monitor.sample {
-            Text("Pressure: \(sample.pressure)%")
-            Text(String(format: "Used: %.2f / %.2f GB", sample.usedGB, sample.totalGB))
-        } else {
-            Text("Reading memory failed")
-        }
-
-        Divider()
-
-        Toggle("Stacked Layout", isOn: $monitor.stacked)
-
-        Picker("Refresh", selection: $monitor.interval) {
-            Text("1 second").tag(1.0)
-            Text("2 seconds").tag(2.0)
-            Text("5 seconds").tag(5.0)
-            Text("10 seconds").tag(10.0)
-        }
-
-        Toggle("Launch at Login", isOn: $launchAtLogin)
-            .onChange(of: launchAtLogin) { _, enabled in
-                do {
-                    if enabled {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                } catch {
-                    launchAtLogin = SMAppService.mainApp.status == .enabled
+        VStack(alignment: .leading, spacing: 12) {
+            if let sample = monitor.sample {
+                HStack {
+                    Text("Pressure: \(sample.pressure)%")
+                    Spacer()
+                    Text(String(format: "Used: %.2f / %.0f GB", sample.usedGB, sample.totalGB))
                 }
+                .font(.system(size: 12).monospacedDigit())
+            } else {
+                Text("Reading memory failed")
             }
 
-        Divider()
+            HistoryChart(history: monitor.history)
+                .frame(height: 120)
 
-        Button("Quit MemBar") { NSApplication.shared.terminate(nil) }
-            .keyboardShortcut("q")
+            Divider()
+
+            Toggle("Stacked layout", isOn: $monitor.stacked)
+
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, enabled in
+                    do {
+                        if enabled {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        launchAtLogin = SMAppService.mainApp.status == .enabled
+                    }
+                }
+
+            Picker("Refresh", selection: $monitor.interval) {
+                Text("1 second").tag(1.0)
+                Text("2 seconds").tag(2.0)
+                Text("5 seconds").tag(5.0)
+                Text("10 seconds").tag(10.0)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Quit MemBar") { NSApplication.shared.terminate(nil) }
+                    .keyboardShortcut("q")
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
     }
 }
 
@@ -142,6 +172,7 @@ struct MemBarApp: App {
                     .font(.system(size: 13).monospacedDigit())
             }
         }
-        .menuBarExtraStyle(.menu)
+        // .window so the panel can host a live chart; a plain menu can't.
+        .menuBarExtraStyle(.window)
     }
 }
